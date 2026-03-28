@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>concept-corpus viewer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0e17;
+    --bg2: #111827;
+    --bg3: #1a2235;
+    --fg: #e2e8f0;
+    --fg2: #94a3b8;
+    --accent: #60a5fa;
+    --accent2: #a78bfa;
+    --border: #1e293b;
+    --hover: #2a3a52;
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    height: 100vh;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    grid-template-rows: auto 1fr;
+  }
+
+  header {
+    grid-column: 1 / -1;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    background: var(--bg2);
+  }
+
+  header h1 {
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--fg2);
+  }
+
+  header h1 span { color: var(--accent); }
+
+  .axis-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--fg2);
+  }
+
+  .axis-selector select {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    background: var(--bg3);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    max-width: 280px;
+  }
+
+  .axis-selector select:hover { border-color: var(--accent); }
+
+  .stats {
+    margin-left: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--fg2);
+  }
+
+  /* ── Scatter plot ─────────────────────────────── */
+
+  #plot-container {
+    position: relative;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  canvas { display: block; }
+
+  .axis-label {
+    position: absolute;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--fg2);
+    opacity: 0.6;
+    pointer-events: none;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .axis-label.x-axis { bottom: 8px; left: 50%; transform: translateX(-50%); }
+  .axis-label.y-axis { top: 50%; left: 8px; transform: rotate(-90deg) translateX(-50%); transform-origin: left center; }
+
+  /* ── Tooltip ──────────────────────────────────── */
+
+  #tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    max-width: 320px;
+    font-size: 13px;
+    line-height: 1.5;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    display: none;
+    z-index: 100;
+  }
+
+  #tooltip .title {
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--fg);
+  }
+
+  #tooltip .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--fg2);
+    margin-bottom: 8px;
+  }
+
+  /* ── Side panel ───────────────────────────────── */
+
+  #sidebar {
+    background: var(--bg2);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  .panel-section {
+    margin-bottom: 24px;
+  }
+
+  .panel-section h2 {
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg2);
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .legend-item:hover { color: var(--accent); }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .legend-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--fg2);
+    margin-left: auto;
+  }
+
+  .cluster-item {
+    padding: 8px;
+    margin-bottom: 6px;
+    background: var(--bg3);
+    border-radius: 4px;
+    border-left: 3px solid var(--border);
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+
+  .cluster-item:hover { border-left-color: var(--accent); }
+
+  .cluster-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+
+  .cluster-docs {
+    font-size: 12px;
+    color: var(--fg2);
+    line-height: 1.6;
+  }
+
+  .doc-list-item {
+    padding: 6px 8px;
+    margin-bottom: 2px;
+    border-radius: 3px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .doc-list-item:hover { background: var(--hover); }
+
+  .doc-list-item .doc-title { font-weight: 500; }
+  .doc-list-item .doc-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--fg2);
+  }
+
+  .file-input-area {
+    border: 2px dashed var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    text-align: center;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--fg2);
+    transition: border-color 0.15s;
+  }
+
+  .file-input-area:hover { border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>concept</span>-corpus</h1>
+  <div class="axis-selector">
+    <label>X:</label>
+    <select id="x-axis"></select>
+  </div>
+  <div class="axis-selector">
+    <label>Y:</label>
+    <select id="y-axis"></select>
+  </div>
+  <div class="stats" id="stats"></div>
+</header>
+
+<div id="plot-container">
+  <canvas id="canvas"></canvas>
+  <div class="axis-label x-axis" id="x-label"></div>
+  <div class="axis-label y-axis" id="y-label"></div>
+  <div id="tooltip"></div>
+</div>
+
+<div id="sidebar">
+  <div class="panel-section">
+    <h2>Load Data</h2>
+    <div class="file-input-area" id="file-drop">
+      Click or drop <code>layout.json</code> here
+      <input type="file" id="file-input" accept=".json" style="display:none">
+    </div>
+  </div>
+
+  <div class="panel-section" id="legend-section" style="display:none">
+    <h2>Contributors</h2>
+    <div id="legend"></div>
+  </div>
+
+  <div class="panel-section" id="clusters-section" style="display:none">
+    <h2>Clusters</h2>
+    <div id="clusters"></div>
+  </div>
+
+  <div class="panel-section" id="docs-section" style="display:none">
+    <h2>Documents</h2>
+    <div id="doc-list"></div>
+  </div>
+</div>
+
+<script>
+// ── State ───────────────────────────────────────────────────
+
+let layoutData = null;
+let xAxisIdx = 0;
+let yAxisIdx = 1;
+let hoveredDoc = null;
+let highlightedCluster = null;
+
+const COLORS = [
+  '#60a5fa', '#a78bfa', '#34d399', '#fbbf24', '#f87171',
+  '#fb923c', '#e879f9', '#22d3ee', '#a3e635', '#f472b6'
+];
+let contributorColors = {};
+
+// ── File loading ────────────────────────────────────────────
+
+const fileDrop = document.getElementById('file-drop');
+const fileInput = document.getElementById('file-input');
+
+fileDrop.addEventListener('click', () => fileInput.click());
+fileDrop.addEventListener('dragover', e => { e.preventDefault(); fileDrop.style.borderColor = 'var(--accent)'; });
+fileDrop.addEventListener('dragleave', () => { fileDrop.style.borderColor = 'var(--border)'; });
+fileDrop.addEventListener('drop', e => {
+  e.preventDefault();
+  fileDrop.style.borderColor = 'var(--border)';
+  if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files.length) loadFile(e.target.files[0]); });
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      layoutData = JSON.parse(e.target.result);
+      initVisualization();
+    } catch (err) {
+      alert('Failed to parse JSON: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ── Initialization ──────────────────────────────────────────
+
+function initVisualization() {
+  if (!layoutData) return;
+
+  const contributors = [...new Set(layoutData.documents.map(d => d.tags?.contributor || 'unknown'))];
+  contributors.forEach((c, i) => { contributorColors[c] = COLORS[i % COLORS.length]; });
+
+  const xSel = document.getElementById('x-axis');
+  const ySel = document.getElementById('y-axis');
+  xSel.innerHTML = '';
+  ySel.innerHTML = '';
+
+  layoutData.axes.forEach((ax, i) => {
+    const label = `PC${ax.index}: ${ax.label} (${(ax.variance_explained * 100).toFixed(1)}%)`;
+    xSel.add(new Option(label, i));
+    ySel.add(new Option(label, i));
+  });
+
+  xSel.value = 0;
+  ySel.value = Math.min(1, layoutData.axes.length - 1);
+  xAxisIdx = 0;
+  yAxisIdx = parseInt(ySel.value);
+
+  xSel.addEventListener('change', () => { xAxisIdx = parseInt(xSel.value); render(); });
+  ySel.addEventListener('change', () => { yAxisIdx = parseInt(ySel.value); render(); });
+
+  document.getElementById('stats').textContent =
+    `${layoutData.n_documents} docs · ${layoutData.n_concepts} concepts`;
+
+  const legend = document.getElementById('legend');
+  legend.innerHTML = '';
+  contributors.forEach(c => {
+    const count = layoutData.documents.filter(d => (d.tags?.contributor || 'unknown') === c).length;
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.innerHTML = `<div class="legend-dot" style="background:${contributorColors[c]}"></div>${c}<span class="legend-count">${count}</span>`;
+    legend.appendChild(item);
+  });
+  document.getElementById('legend-section').style.display = '';
+
+  buildClusterList();
+  buildDocList();
+  render();
+}
+
+// ── Cluster list from dendrogram ────────────────────────────
+
+function buildClusterList() {
+  const container = document.getElementById('clusters');
+  container.innerHTML = '';
+
+  if (!layoutData.dendrogram) return;
+
+  const root = layoutData.dendrogram;
+  const nodes = [];
+
+  function collectClusters(node, depth) {
+    if (!node.left && !node.right) return;
+    if (depth > 0 && depth <= 3) {
+      nodes.push(node);
+    }
+    if (node.left) collectClusters(node.left, depth + 1);
+    if (node.right) collectClusters(node.right, depth + 1);
+  }
+  collectClusters(root, 0);
+
+  if (nodes.length === 0 && root.left) {
+    if (root.left) nodes.push(root.left);
+    if (root.right) nodes.push(root.right);
+  }
+
+  nodes.forEach(node => {
+    const item = document.createElement('div');
+    item.className = 'cluster-item';
+    item.innerHTML = `
+      <div class="cluster-label">${node.label || 'cluster'}</div>
+      <div class="cluster-docs">${node.size} documents</div>
+    `;
+    item.addEventListener('mouseenter', () => {
+      highlightedCluster = new Set(node.doc_ids);
+      render();
+    });
+    item.addEventListener('mouseleave', () => {
+      highlightedCluster = null;
+      render();
+    });
+    container.appendChild(item);
+  });
+
+  document.getElementById('clusters-section').style.display = '';
+}
+
+function buildDocList() {
+  const container = document.getElementById('doc-list');
+  container.innerHTML = '';
+
+  layoutData.documents.forEach(doc => {
+    const item = document.createElement('div');
+    item.className = 'doc-list-item';
+    const contributor = doc.tags?.contributor || 'unknown';
+    const color = contributorColors[contributor] || '#888';
+    item.innerHTML = `
+      <div class="doc-title" style="color:${color}">${doc.title}</div>
+      <div class="doc-meta">${contributor} · ${doc.n_concepts} concepts</div>
+    `;
+    item.addEventListener('mouseenter', () => { hoveredDoc = doc.doc_id; render(); });
+    item.addEventListener('mouseleave', () => { hoveredDoc = null; render(); });
+    container.appendChild(item);
+  });
+
+  document.getElementById('docs-section').style.display = '';
+}
+
+// ── Rendering ───────────────────────────────────────────────
+
+function render() {
+  if (!layoutData) return;
+
+  const container = document.getElementById('plot-container');
+  const canvas = document.getElementById('canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const w = container.clientWidth;
+  const h = container.clientHeight;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg').trim();
+  ctx.fillRect(0, 0, w, h);
+
+  const xKey = `pc${layoutData.axes[xAxisIdx].index}`;
+  const yKey = `pc${layoutData.axes[yAxisIdx].index}`;
+
+  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+  layoutData.documents.forEach(d => {
+    const x = d.coordinates[xKey] || 0;
+    const y = d.coordinates[yKey] || 0;
+    if (x < xMin) xMin = x; if (x > xMax) xMax = x;
+    if (y < yMin) yMin = y; if (y > yMax) yMax = y;
+  });
+
+  const pad = 60;
+  const xRange = (xMax - xMin) || 1;
+  const yRange = (yMax - yMin) || 1;
+  const xScale = (w - pad * 2) / xRange;
+  const yScale = (h - pad * 2) / yRange;
+
+  // Draw grid at origin
+  ctx.strokeStyle = '#1a2235';
+  ctx.lineWidth = 1;
+  const midX = pad + (0 - xMin) * xScale;
+  const midY = h - pad - (0 - yMin) * yScale;
+  if (midX > pad && midX < w - pad) {
+    ctx.beginPath(); ctx.moveTo(midX, pad); ctx.lineTo(midX, h - pad); ctx.stroke();
+  }
+  if (midY > pad && midY < h - pad) {
+    ctx.beginPath(); ctx.moveTo(pad, midY); ctx.lineTo(w - pad, midY); ctx.stroke();
+  }
+
+  // Compute screen positions
+  const docScreenPositions = layoutData.documents.map(doc => {
+    const x = doc.coordinates[xKey] || 0;
+    const y = doc.coordinates[yKey] || 0;
+    return {
+      doc,
+      sx: pad + (x - xMin) * xScale,
+      sy: h - pad - (y - yMin) * yScale,
+    };
+  });
+
+  // Draw cluster connections
+  if (highlightedCluster) {
+    ctx.strokeStyle = 'rgba(96, 165, 250, 0.15)';
+    ctx.lineWidth = 1;
+    const clusterDocs = docScreenPositions.filter(d => highlightedCluster.has(d.doc.doc_id));
+    for (let i = 0; i < clusterDocs.length; i++) {
+      for (let j = i + 1; j < clusterDocs.length; j++) {
+        ctx.beginPath();
+        ctx.moveTo(clusterDocs[i].sx, clusterDocs[i].sy);
+        ctx.lineTo(clusterDocs[j].sx, clusterDocs[j].sy);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Draw dots
+  docScreenPositions.forEach(({ doc, sx, sy }) => {
+    const contributor = doc.tags?.contributor || 'unknown';
+    const color = contributorColors[contributor] || '#888';
+    const isHovered = doc.doc_id === hoveredDoc;
+    const inCluster = !highlightedCluster || highlightedCluster.has(doc.doc_id);
+    const dimmed = highlightedCluster && !inCluster;
+
+    const radius = isHovered ? 10 : 7;
+    const alpha = dimmed ? 0.15 : 1;
+
+    if (isHovered) {
+      ctx.beginPath();
+      ctx.arc(sx, sy, 20, 0, Math.PI * 2);
+      ctx.fillStyle = color + '22';
+      ctx.fill();
+    }
+
+    ctx.beginPath();
+    ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = dimmed ? 'transparent' : 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Labels
+    if (isHovered || layoutData.documents.length <= 20) {
+      ctx.font = `${dimmed ? '10' : '11'}px 'DM Sans', sans-serif`;
+      ctx.fillStyle = dimmed ? 'rgba(148,163,184,0.3)' : '#e2e8f0';
+      ctx.textAlign = 'center';
+      const label = doc.title.length > 35 ? doc.title.substring(0, 35) + '…' : doc.title;
+      ctx.fillText(label, sx, sy - radius - 6);
+    }
+  });
+
+  // Axis labels
+  document.getElementById('x-label').textContent = layoutData.axes[xAxisIdx].label;
+  document.getElementById('y-label').textContent = layoutData.axes[yAxisIdx].label;
+}
+
+// ── Mouse interaction ───────────────────────────────────────
+
+const canvasEl = document.getElementById('canvas');
+const tooltip = document.getElementById('tooltip');
+
+canvasEl.addEventListener('mousemove', e => {
+  if (!layoutData) return;
+
+  const container = document.getElementById('plot-container');
+  const rect = canvasEl.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const w = container.clientWidth;
+  const h = container.clientHeight;
+  const pad = 60;
+
+  const xKey = `pc${layoutData.axes[xAxisIdx].index}`;
+  const yKey = `pc${layoutData.axes[yAxisIdx].index}`;
+
+  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+  layoutData.documents.forEach(d => {
+    const x = d.coordinates[xKey] || 0;
+    const y = d.coordinates[yKey] || 0;
+    if (x < xMin) xMin = x; if (x > xMax) xMax = x;
+    if (y < yMin) yMin = y; if (y > yMax) yMax = y;
+  });
+  const xRange = (xMax - xMin) || 1;
+  const yRange = (yMax - yMin) || 1;
+  const xScale = (w - pad * 2) / xRange;
+  const yScale = (h - pad * 2) / yRange;
+
+  let closest = null;
+  let closestDist = 20;
+
+  layoutData.documents.forEach(doc => {
+    const x = doc.coordinates[xKey] || 0;
+    const y = doc.coordinates[yKey] || 0;
+    const sx = pad + (x - xMin) * xScale;
+    const sy = h - pad - (y - yMin) * yScale;
+    const dist = Math.sqrt((mx - sx) ** 2 + (my - sy) ** 2);
+    if (dist < closestDist) {
+      closestDist = dist;
+      closest = doc;
+    }
+  });
+
+  if (closest) {
+    hoveredDoc = closest.doc_id;
+    const contributor = closest.tags?.contributor || 'unknown';
+    tooltip.innerHTML = `
+      <div class="title">${closest.title}</div>
+      <div class="meta">${contributor} · ${closest.n_concepts} concepts · ${closest.source}</div>
+    `;
+    tooltip.style.display = 'block';
+
+    let tx = e.clientX - rect.left + 16;
+    let ty = e.clientY - rect.top - 10;
+    if (tx + 320 > w) tx = e.clientX - rect.left - 336;
+    if (ty + 100 > h) ty = h - 110;
+    tooltip.style.left = tx + 'px';
+    tooltip.style.top = ty + 'px';
+  } else {
+    hoveredDoc = null;
+    tooltip.style.display = 'none';
+  }
+
+  render();
+});
+
+canvasEl.addEventListener('mouseleave', () => {
+  hoveredDoc = null;
+  tooltip.style.display = 'none';
+  render();
+});
+
+window.addEventListener('resize', () => { if (layoutData) render(); });
+</script>
+</body>
+</html>

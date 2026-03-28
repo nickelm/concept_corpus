@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "concept-corpus"
+version = "0.1.0"
+description = "Semantic TF-IDF for LLM-extracted concepts"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "litellm>=1.0",
+    "python-dotenv>=1.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+]
+
+[project.optional-dependencies]
+pdf = ["pymupdf>=1.23"]
+
+[project.scripts]
+concept-corpus = "concept_corpus.__main__:main"
