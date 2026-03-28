@@ -10,6 +10,7 @@ dist/
 build/
 *.egg
 
+# API Keys
 .env
 
 # Corpus data (don't commit ingested documents)

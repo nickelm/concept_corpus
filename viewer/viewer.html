@@ -74,6 +74,33 @@
 
   .axis-selector select:hover { border-color: var(--accent); }
 
+  .aggregation-slider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--fg2);
+  }
+
+  .aggregation-slider label {
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .aggregation-slider input[type="range"] {
+    width: 160px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  #agg-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    white-space: nowrap;
+    min-width: 80px;
+  }
+
   .stats {
     margin-left: auto;
     font-family: 'JetBrains Mono', monospace;
@@ -255,6 +282,11 @@
     <label>Y:</label>
     <select id="y-axis"></select>
   </div>
+  <div class="aggregation-slider" id="agg-slider-container" style="display:none">
+    <label>Aggregation:</label>
+    <input type="range" id="agg-slider" min="0" max="1000" value="0" step="1">
+    <span id="agg-label"></span>
+  </div>
   <div class="stats" id="stats"></div>
 </header>
 
@@ -303,7 +335,18 @@ const COLORS = [
   '#60a5fa', '#a78bfa', '#34d399', '#fbbf24', '#f87171',
   '#fb923c', '#e879f9', '#22d3ee', '#a3e635', '#f472b6'
 ];
+const BLOB_COLORS = [
+  '#6b8cae', '#8b7a6b', '#7b9e6b', '#9b7b8e', '#6b9b9b',
+  '#ae8b6b', '#7b8bae', '#9b8b6b', '#6bae8b', '#8b6b9b'
+];
 let contributorColors = {};
+let aggregationThreshold = 0;
+let currentClusters = [];
+let clusterColorMap = {};
+let hoveredCluster = null;
+let docToClusterMap = new Map();
+let maxDendrogramDist = 0;
+let minDendrogramDist = 0;
 
 // ── File loading ────────────────────────────────────────────
 
@@ -360,6 +403,40 @@ function initVisualization() {
   xSel.addEventListener('change', () => { xAxisIdx = parseInt(xSel.value); render(); });
   ySel.addEventListener('change', () => { yAxisIdx = parseInt(ySel.value); render(); });
 
+  // Aggregation slider
+  const slider = document.getElementById('agg-slider');
+  const aggLabel = document.getElementById('agg-label');
+  document.getElementById('agg-slider-container').style.display = '';
+  if (layoutData.dendrogram) {
+    const dists = collectDistances(layoutData.dendrogram);
+    maxDendrogramDist = Math.max(...dists);
+    minDendrogramDist = Math.min(...dists);
+  } else {
+    maxDendrogramDist = 0;
+    minDendrogramDist = 0;
+  }
+
+  slider.addEventListener('input', () => {
+    const pct = parseFloat(slider.value) / 1000;
+    // pct=0 → full resolution; pct>0 maps across [minDist-ε, maxDist+ε] where merges happen
+    const eps = (maxDendrogramDist - minDendrogramDist) * 0.02;
+    aggregationThreshold = pct === 0 ? 0 : (minDendrogramDist - eps) + pct * (maxDendrogramDist - minDendrogramDist + 2 * eps);
+    currentClusters = cutDendrogram(aggregationThreshold);
+    assignClusterColors(currentClusters);
+    rebuildDocToClusterMap();
+    const count = currentClusters.length;
+    aggLabel.textContent = count === 1 ? '1 cluster' : `${count} clusters`;
+    buildClusterList();
+    render();
+  });
+
+  aggregationThreshold = 0;
+  currentClusters = cutDendrogram(0);
+  assignClusterColors(currentClusters);
+  rebuildDocToClusterMap();
+  aggLabel.textContent = `${layoutData.documents.length} clusters`;
+  slider.value = 0;
+
   document.getElementById('stats').textContent =
     `${layoutData.n_documents} docs · ${layoutData.n_concepts} concepts`;
 
@@ -387,37 +464,29 @@ function buildClusterList() {
 
   if (!layoutData.dendrogram) return;
 
-  const root = layoutData.dendrogram;
-  const nodes = [];
-
-  function collectClusters(node, depth) {
-    if (!node.left && !node.right) return;
-    if (depth > 0 && depth <= 3) {
-      nodes.push(node);
-    }
-    if (node.left) collectClusters(node.left, depth + 1);
-    if (node.right) collectClusters(node.right, depth + 1);
-  }
-  collectClusters(root, 0);
-
-  if (nodes.length === 0 && root.left) {
-    if (root.left) nodes.push(root.left);
-    if (root.right) nodes.push(root.right);
+  if (aggregationThreshold === 0) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--fg2);padding:8px;">Adjust aggregation slider to group documents into clusters.</div>';
+    document.getElementById('clusters-section').style.display = '';
+    return;
   }
 
-  nodes.forEach(node => {
+  currentClusters.forEach(cluster => {
     const item = document.createElement('div');
     item.className = 'cluster-item';
+    const color = clusterColorMap[cluster.nodeId] || '#888';
+    item.style.borderLeftColor = color;
     item.innerHTML = `
-      <div class="cluster-label">${node.label || 'cluster'}</div>
-      <div class="cluster-docs">${node.size} documents</div>
+      <div class="cluster-label" style="color:${color}">${cluster.label || 'cluster'}</div>
+      <div class="cluster-docs">${cluster.size} document${cluster.size !== 1 ? 's' : ''}</div>
     `;
     item.addEventListener('mouseenter', () => {
-      highlightedCluster = new Set(node.doc_ids);
+      highlightedCluster = new Set(cluster.docIds);
+      hoveredCluster = cluster.nodeId;
       render();
     });
     item.addEventListener('mouseleave', () => {
       highlightedCluster = null;
+      hoveredCluster = null;
       render();
     });
     container.appendChild(item);
@@ -439,12 +508,69 @@ function buildDocList() {
       <div class="doc-title" style="color:${color}">${doc.title}</div>
       <div class="doc-meta">${contributor} · ${doc.n_concepts} concepts</div>
     `;
-    item.addEventListener('mouseenter', () => { hoveredDoc = doc.doc_id; render(); });
-    item.addEventListener('mouseleave', () => { hoveredDoc = null; render(); });
+    item.addEventListener('mouseenter', () => {
+      hoveredDoc = doc.doc_id;
+      if (aggregationThreshold > 0) {
+        const cId = docToClusterMap.get(doc.doc_id);
+        if (cId !== undefined) {
+          hoveredCluster = cId;
+          const cluster = currentClusters.find(c => c.nodeId === cId);
+          if (cluster) highlightedCluster = new Set(cluster.docIds);
+        }
+      }
+      render();
+    });
+    item.addEventListener('mouseleave', () => {
+      hoveredDoc = null;
+      hoveredCluster = null;
+      highlightedCluster = null;
+      render();
+    });
     container.appendChild(item);
   });
 
   document.getElementById('docs-section').style.display = '';
+}
+
+// ── Dendrogram cut & cluster helpers ────────────────────────
+
+function collectDistances(node) {
+  const dists = [];
+  if (node.distance > 0) dists.push(node.distance);
+  if (node.left) dists.push(...collectDistances(node.left));
+  if (node.right) dists.push(...collectDistances(node.right));
+  return dists;
+}
+
+function cutDendrogram(threshold) {
+  if (!layoutData || !layoutData.dendrogram) return [];
+  const clusters = [];
+  function walk(node) {
+    if (!node.left && !node.right) {
+      clusters.push({ nodeId: node.node_id, label: node.label, docIds: node.doc_ids, size: node.size });
+      return;
+    }
+    if (node.distance <= threshold) {
+      clusters.push({ nodeId: node.node_id, label: node.label, docIds: node.doc_ids, size: node.size });
+    } else {
+      if (node.left) walk(node.left);
+      if (node.right) walk(node.right);
+    }
+  }
+  walk(layoutData.dendrogram);
+  return clusters;
+}
+
+function assignClusterColors(clusters) {
+  clusterColorMap = {};
+  clusters.forEach((c, i) => { clusterColorMap[c.nodeId] = BLOB_COLORS[i % BLOB_COLORS.length]; });
+}
+
+function rebuildDocToClusterMap() {
+  docToClusterMap = new Map();
+  currentClusters.forEach(c => {
+    c.docIds.forEach(id => docToClusterMap.set(id, c.nodeId));
+  });
 }
 
 // ── Rendering ───────────────────────────────────────────────
@@ -508,6 +634,37 @@ function render() {
     };
   });
 
+  // Build position lookup for blob rendering
+  const docPosMap = new Map();
+  docScreenPositions.forEach(d => docPosMap.set(d.doc.doc_id, d));
+
+  // Draw cluster blobs (only when aggregation > 0)
+  if (aggregationThreshold > 0 && currentClusters.length > 0) {
+    const baseRadius = 45;
+    currentClusters.forEach(cluster => {
+      const color = clusterColorMap[cluster.nodeId];
+      const members = cluster.docIds.map(id => docPosMap.get(id)).filter(Boolean);
+      if (members.length === 0) return;
+
+      const blobInHighlight = !highlightedCluster || cluster.docIds.some(id => highlightedCluster.has(id));
+      const blobDimmed = highlightedCluster && !blobInHighlight;
+      const radius = Math.sqrt(cluster.size) * baseRadius;
+
+      members.forEach(({ sx, sy }) => {
+        ctx.beginPath();
+        ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.globalAlpha = blobDimmed ? 0.05 : 0.18;
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = blobDimmed ? 0.1 : 0.4;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      });
+    });
+  }
+
   // Draw cluster connections
   if (highlightedCluster) {
     ctx.strokeStyle = 'rgba(96, 165, 250, 0.15)';
@@ -524,6 +681,7 @@ function render() {
   }
 
   // Draw dots
+  const isAggregated = aggregationThreshold > 0;
   docScreenPositions.forEach(({ doc, sx, sy }) => {
     const contributor = doc.tags?.contributor || 'unknown';
     const color = contributorColors[contributor] || '#888';
@@ -531,35 +689,80 @@ function render() {
     const inCluster = !highlightedCluster || highlightedCluster.has(doc.doc_id);
     const dimmed = highlightedCluster && !inCluster;
 
-    const radius = isHovered ? 10 : 7;
-    const alpha = dimmed ? 0.15 : 1;
+    if (isAggregated) {
+      // Small member dots inside blobs
+      const radius = isHovered ? 6 : 3.5;
+      const alpha = dimmed ? 0.1 : 1;
 
-    if (isHovered) {
+      if (isHovered) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, 14, 0, Math.PI * 2);
+        ctx.fillStyle = color + '22';
+        ctx.fill();
+      }
+
       ctx.beginPath();
-      ctx.arc(sx, sy, 20, 0, Math.PI * 2);
-      ctx.fillStyle = color + '22';
+      ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
       ctx.fill();
-    }
+      ctx.globalAlpha = 1;
+    } else {
+      // Full-resolution dots
+      const radius = isHovered ? 10 : 7;
+      const alpha = dimmed ? 0.15 : 1;
 
-    ctx.beginPath();
-    ctx.arc(sx, sy, radius, 0, Math.PI * 2);
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.strokeStyle = dimmed ? 'transparent' : 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+      if (isHovered) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, 20, 0, Math.PI * 2);
+        ctx.fillStyle = color + '22';
+        ctx.fill();
+      }
 
-    // Labels
-    if (isHovered || layoutData.documents.length <= 20) {
-      ctx.font = `${dimmed ? '10' : '11'}px 'DM Sans', sans-serif`;
-      ctx.fillStyle = dimmed ? 'rgba(148,163,184,0.3)' : '#e2e8f0';
-      ctx.textAlign = 'center';
-      const label = doc.title.length > 35 ? doc.title.substring(0, 35) + '…' : doc.title;
-      ctx.fillText(label, sx, sy - radius - 6);
+      ctx.beginPath();
+      ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = dimmed ? 'transparent' : 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // Labels at full resolution
+      if (isHovered || layoutData.documents.length <= 20) {
+        ctx.font = `${dimmed ? '10' : '11'}px 'DM Sans', sans-serif`;
+        ctx.fillStyle = dimmed ? 'rgba(148,163,184,0.3)' : '#e2e8f0';
+        ctx.textAlign = 'center';
+        const label = doc.title.length > 35 ? doc.title.substring(0, 35) + '…' : doc.title;
+        ctx.fillText(label, sx, sy - radius - 6);
+      }
     }
   });
+
+  // Draw blob hover/highlight labels
+  if (isAggregated) {
+    currentClusters.forEach(cluster => {
+      const isHoveredBlob = hoveredCluster === cluster.nodeId;
+      const isHighlighted = highlightedCluster && cluster.docIds.some(id => highlightedCluster.has(id));
+
+      if (isHoveredBlob || isHighlighted) {
+        const members = cluster.docIds.map(id => docPosMap.get(id)).filter(Boolean);
+        if (members.length === 0) return;
+
+        const cx = members.reduce((s, m) => s + m.sx, 0) / members.length;
+        const cy = members.reduce((s, m) => s + m.sy, 0) / members.length;
+
+        ctx.font = "bold 12px 'DM Sans', sans-serif";
+        ctx.fillStyle = '#e2e8f0';
+        ctx.textAlign = 'center';
+        ctx.fillText(cluster.label, cx, cy - 8);
+        ctx.font = "11px 'JetBrains Mono', monospace";
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(`${cluster.size} document${cluster.size !== 1 ? 's' : ''}`, cx, cy + 8);
+      }
+    });
+  }
 
   // Axis labels
   document.getElementById('x-label').textContent = layoutData.axes[xAxisIdx].label;
@@ -597,8 +800,10 @@ canvasEl.addEventListener('mousemove', e => {
   const xScale = (w - pad * 2) / xRange;
   const yScale = (h - pad * 2) / yRange;
 
+  // Find closest doc
+  const docThreshold = aggregationThreshold > 0 ? 10 : 20;
   let closest = null;
-  let closestDist = 20;
+  let closestDist = docThreshold;
 
   layoutData.documents.forEach(doc => {
     const x = doc.coordinates[xKey] || 0;
@@ -611,6 +816,30 @@ canvasEl.addEventListener('mousemove', e => {
       closest = doc;
     }
   });
+
+  // Find hovered blob (when aggregated)
+  let newHoveredCluster = null;
+  if (aggregationThreshold > 0 && currentClusters.length > 0) {
+    const baseRadius = 45;
+    for (const cluster of currentClusters) {
+      const blobRadius = Math.sqrt(cluster.size) * baseRadius;
+      for (const docId of cluster.docIds) {
+        const doc = layoutData.documents.find(d => d.doc_id === docId);
+        if (!doc) continue;
+        const x = doc.coordinates[xKey] || 0;
+        const y = doc.coordinates[yKey] || 0;
+        const sx = pad + (x - xMin) * xScale;
+        const sy = h - pad - (y - yMin) * yScale;
+        const dist = Math.sqrt((mx - sx) ** 2 + (my - sy) ** 2);
+        if (dist < blobRadius) {
+          newHoveredCluster = cluster.nodeId;
+          break;
+        }
+      }
+      if (newHoveredCluster !== null) break;
+    }
+  }
+  hoveredCluster = newHoveredCluster;
 
   if (closest) {
     hoveredDoc = closest.doc_id;
@@ -637,6 +866,7 @@ canvasEl.addEventListener('mousemove', e => {
 
 canvasEl.addEventListener('mouseleave', () => {
   hoveredDoc = null;
+  hoveredCluster = null;
   tooltip.style.display = 'none';
   render();
 });
